@@ -1,0 +1,916 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>ShabuAllDay PSR Analyzer (Kakao) — Buckets + Category Summary + Tooltip + CSV</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="data:," />
+
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:Arial,Helvetica,sans-serif;margin:0;padding:16px;color:#111}
+    h2{margin:0 0 12px}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:10px 0}
+    label{font-weight:700}
+    input[type="text"],input[type="number"],select{padding:8px 10px;border:1px solid #ddd;border-radius:8px}
+    input[type="file"]{padding:6px}
+    button{padding:10px 14px;border:1px solid #111;background:#111;color:#fff;border-radius:8px;cursor:pointer}
+    button.secondary{background:#fff;color:#111}
+    button:disabled{opacity:.5;cursor:not-allowed}
+    #map{width:100%;height:55vh;border:1px solid #ddd;border-radius:10px}
+    .log{font-family:Consolas,Menlo,monospace;white-space:pre-wrap;background:#f8f8f8;padding:10px;border:1px solid #ddd;border-radius:8px;max-height:22vh;overflow:auto}
+    .pill{padding:2px 8px;border-radius:999px;background:#eef2ff;color:#111;font-size:12px}
+    .muted{color:#666}
+    .tiny{font-size:12px}
+    .card{border:1px solid #e5e7eb;border-radius:10px;padding:10px;background:#fff}
+    .grid{display:grid;grid-template-columns:180px 1fr;gap:8px;align-items:center}
+
+    .legend{display:flex; gap:10px; align-items:center; flex-wrap:wrap}
+    .dot{width:12px;height:12px;border-radius:999px;display:inline-block;border:2px solid #0003}
+    .dot.red{background:#EF4444}
+    .dot.green{background:#10B981}
+    .dot.blue{background:#3B82F6}
+    .dot.gray{background:#9CA3AF}
+
+    .cols{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    @media (max-width: 980px){ .cols{grid-template-columns:1fr;} }
+
+    .bucketTitle{display:flex;align-items:center;gap:8px;margin:0 0 8px}
+    .bucketList{max-height:220px;overflow:auto;border:1px solid #e5e7eb;border-radius:10px;padding:10px;background:#fff}
+    .bucketItem{padding:6px 8px;border-radius:10px}
+    .bucketItem:hover{background:#f8fafc}
+    .badge{display:inline-block;padding:2px 8px;border-radius:999px;background:#f1f5f9;border:1px solid #e5e7eb;font-size:12px;margin-left:6px}
+    a.store{color:#111;text-decoration:none}
+    a.store:hover{text-decoration:underline}
+
+    table{border-collapse:collapse;width:100%}
+    th,td{border:1px solid #e5e7eb;padding:6px 8px;font-size:12px;vertical-align:top}
+    th{background:#f8fafc;text-align:left;position:sticky;top:0;z-index:2}
+    tr:hover{background:#f8fafc}
+
+    /* tooltip */
+    #tooltip{
+      position: fixed;
+      display: none;
+      z-index: 99999;
+      pointer-events: none;
+      background:#111;
+      color:#fff;
+      padding:10px 12px;
+      border-radius:10px;
+      max-width:520px;
+      font-size:12px;
+      box-shadow:0 10px 24px rgba(0,0,0,.18);
+      line-height:1.35;
+    }
+    #tooltip .t{font-weight:700;margin-bottom:6px}
+    #tooltip .kv{display:grid;grid-template-columns:110px 1fr;gap:6px;margin:6px 0}
+    #tooltip .k{color:#cbd5e1}
+    #tooltip .months{margin-top:8px;border-top:1px solid rgba(255,255,255,.15);padding-top:8px}
+    #tooltip code{background:rgba(255,255,255,.12);padding:1px 6px;border-radius:6px}
+  </style>
+</head>
+
+<body>
+  <h2>샤브올데이 PSR Analyzer — Buckets + Category Summary + Tooltip + CSV</h2>
+
+  <div class="row">
+    <label for="kakaoKey">Kakao JavaScript Key</label>
+    <input id="kakaoKey" type="text" placeholder="paste JS key" size="30">
+    <button id="loadSdk">Load SDK</button>
+    <span style="flex:1"></span>
+    <div class="legend tiny">
+      <span class="dot red"></span> Bucket 1 (PSR &lt; N1)
+      <span class="dot green"></span> Bucket 2 (N1 ≤ PSR &lt; N2)
+      <span class="dot blue"></span> Bucket 3 (PSR ≥ N2)
+      <span class="dot gray"></span> No data
+    </div>
+  </div>
+
+  <div class="row">
+    <label for="xlsx">Upload XLSX</label>
+    <input id="xlsx" type="file" accept=".xlsx,.xls" />
+    <span class="muted tiny">* Sheet 1: 샤브올데이(좌표) / 추가 Sheet: 샤브올데이PSR</span>
+  </div>
+
+  <div class="row">
+    <label for="n1">Number 1 (만원)</label>
+    <input id="n1" type="number" value="30000" min="0" max="1000000" step="100">
+
+    <label for="n2">Number 2 (만원)</label>
+    <input id="n2" type="number" value="70000" min="0" max="1000000" step="100">
+
+    <label for="mStart">Start Month</label>
+    <select id="mStart"></select>
+
+    <label for="mEnd">End Month</label>
+    <select id="mEnd"></select>
+
+    <button id="analyze" disabled>Analyze PSR</button>
+    <button id="csvTable" class="secondary" disabled>CSV (Table)</button>
+
+    <span style="flex:1"></span>
+    <span class="pill" id="statSheets">Sheets: -</span>
+    <span class="pill" id="statRows">Rows: 0</span>
+  </div>
+
+  <div id="map"></div>
+
+  <div class="row">
+    <div class="card" style="width:100%">
+      <div class="grid">
+        <div><strong>상태</strong></div>
+        <div id="status" class="muted">SDK 로드 후 엑셀 업로드 → Analyze</div>
+
+        <div><strong>월 범위</strong></div>
+        <div id="rangeInfo" class="muted">-</div>
+
+        <div><strong>버킷 요약</strong></div>
+        <div id="bucketInfo" class="muted">-</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="cols">
+    <div class="card">
+      <div class="bucketTitle">
+        <span class="dot red"></span><strong id="b1Title">Bucket 1</strong>
+      </div>
+      <div class="bucketList tiny" id="bucket1"><span class="muted">-</span></div>
+    </div>
+
+    <div class="card">
+      <div class="bucketTitle">
+        <span class="dot green"></span><strong id="b2Title">Bucket 2</strong>
+      </div>
+      <div class="bucketList tiny" id="bucket2"><span class="muted">-</span></div>
+    </div>
+
+    <div class="card">
+      <div class="bucketTitle">
+        <span class="dot blue"></span><strong id="b3Title">Bucket 3</strong>
+      </div>
+      <div class="bucketList tiny" id="bucket3"><span class="muted">-</span></div>
+    </div>
+
+    <div class="card">
+      <div class="bucketTitle">
+        <span class="dot gray"></span><strong id="b4Title">No data available</strong>
+      </div>
+      <div class="bucketList tiny" id="bucket4"><span class="muted">-</span></div>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:12px">
+    <div class="card" style="width:100%">
+      <h3 style="margin:0 0 8px">Category Summary (Avg of store-level Avg PSR)</h3>
+      <div style="overflow:auto;max-height:260px">
+        <table>
+          <thead>
+            <tr>
+              <th>Category</th>
+              <th>Stores</th>
+              <th>Avg PSR</th>
+            </tr>
+          </thead>
+          <tbody id="catBody">
+            <tr><td colspan="3" class="muted">-</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:12px">
+    <div class="card" style="width:100%">
+      <h3 style="margin:0 0 8px">Results Table (hover for details, click to fly)</h3>
+      <div style="overflow:auto;max-height:380px">
+        <table>
+          <thead>
+            <tr id="resultsHead"></tr>
+          </thead>
+          <tbody id="resultsBody">
+            <tr><td class="muted">-</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="tiny muted" style="margin-top:6px">
+        * 테이블 row hover → 지점명/카테고리/Size/Rent/월별 PSR 표시, row click → 지도 이동
+      </div>
+    </div>
+  </div>
+
+  <h4>Log</h4>
+  <div class="log" id="log"></div>
+
+  <div id="tooltip"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+  <script>
+  'use strict';
+
+  // =========================
+  // CONFIG
+  // =========================
+  const MONTH_KEYS = [
+    { key:'Jan', col:'E', label:'Jan (E)', psr:'1월PSR' },
+    { key:'Feb', col:'F', label:'Feb (F)', psr:'2월PSR' },
+    { key:'Mar', col:'G', label:'Mar (G)', psr:'3월PSR' },
+    { key:'Apr', col:'H', label:'Apr (H)', psr:'4월PSR' },
+    { key:'May', col:'I', label:'May (I)', psr:'5월PSR' },
+    { key:'Jun', col:'J', label:'Jun (J)', psr:'6월PSR' },
+    { key:'Jul', col:'K', label:'Jul (K)', psr:'7월PSR' },
+    { key:'Aug', col:'L', label:'Aug (L)', psr:'8월PSR' },
+    { key:'Sep', col:'M', label:'Sep (M)', psr:'9월PSR' },
+    { key:'Oct', col:'N', label:'Oct (N)', psr:'10월PSR' },
+    { key:'Nov', col:'O', label:'Nov (O)', psr:'11월PSR' }
+  ];
+
+  // bucket colors
+  const COLOR_RED   = '#EF4444';
+  const COLOR_GREEN = '#10B981';
+  const COLOR_BLUE  = '#3B82F6';
+  const COLOR_GRAY  = '#9CA3AF';
+
+  // =========================
+  // STATE
+  // =========================
+  let map, sdkReady = false, wbLoaded = false;
+  let shabuPoints = [];            // from sheet1 (coords)
+  let psrRows = [];                // from PSR sheet (raw)
+  let joinedRows = [];             // PSR rows joined with coords
+  let markers = [];                // map overlays
+  let tableRows = [];              // currently rendered rows (for CSV + tooltip)
+  let currentRangeKeys = [];       // month keys used in latest analysis
+
+  // =========================
+  // Utils
+  // =========================
+  function $(id){ return document.getElementById(id); }
+  function log(msg){
+    $('log').textContent += msg + '\n';
+    $('log').scrollTop = $('log').scrollHeight;
+  }
+  function escapeHtml(s){
+    return String(s ?? '')
+      .replace(/&/g,'&amp;')
+      .replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;')
+      .replace(/'/g,'&#039;');
+  }
+  function toNum(v){
+    if(typeof v === 'number') return v;
+    let s = String(v ?? '').trim();
+    s = s.replace(/,/g,'.');
+    s = s.replace(/[^\d.\-]/g,'');
+    const n = parseFloat(s);
+    return isFinite(n) ? n : NaN;
+  }
+  function clampInt(v, min, max){
+    let n = parseInt(v, 10);
+    if(!isFinite(n)) n = min;
+    if(n < min) n = min;
+    if(n > max) n = max;
+    return n;
+  }
+  function debounce(fn, ms){
+    let t;
+    return function(){
+      const args = arguments;
+      clearTimeout(t);
+      t = setTimeout(() => fn.apply(null,args), ms);
+    };
+  }
+  function normalizeName(s){
+    return String(s ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g,' ')
+      .replace(/[()（）\[\]]/g,'')
+      .replace(/점$/,'')
+      .trim();
+  }
+
+  // =========================
+  // Tooltip
+  // =========================
+  function showTooltip(html, x, y){
+    const el = $('tooltip');
+    el.innerHTML = html;
+    el.style.display = 'block';
+    moveTooltip(x,y);
+  }
+  function hideTooltip(){
+    $('tooltip').style.display = 'none';
+  }
+  function moveTooltip(x,y){
+    const el = $('tooltip');
+    const pad = 14;
+    const w = el.offsetWidth || 360;
+    const h = el.offsetHeight || 160;
+    let left = x + pad;
+    let top  = y + pad;
+    if(left + w > window.innerWidth) left = x - w - pad;
+    if(top + h > window.innerHeight) top = y - h - pad;
+    el.style.left = left + 'px';
+    el.style.top  = top + 'px';
+  }
+
+  function buildTooltipHTML(r, rangeKeys){
+    const months = rangeKeys.map(k => {
+      const v = r.months && (k in r.months) ? r.months[k] : '';
+      const vv = (v == null || v === '') ? '-' : v;
+      return `<div class="kv"><div class="k">${escapeHtml(k)}</div><div>${escapeHtml(vv)}</div></div>`;
+    }).join('');
+
+    return `
+      <div class="t">${escapeHtml(r.storeName || '(무제)')}</div>
+      <div><code>${escapeHtml(r.bucket)}</code> / Avg PSR: <strong>${r.avgPSR == null ? 'N/A' : r.avgPSR.toFixed(2)}</strong> (n=${r.usedMonths})</div>
+      <div class="kv" style="margin-top:8px">
+        <div class="k">Category</div><div>${escapeHtml(r.category || '')}</div>
+        <div class="k">Size</div><div>${escapeHtml(r.size || '')}</div>
+        <div class="k">Rent</div><div>${escapeHtml(r.rent || '')}</div>
+        <div class="k">Address</div><div>${escapeHtml(r.address || '')}</div>
+      </div>
+      <div class="months">
+        <div style="font-weight:700;margin-bottom:6px">Monthly PSR</div>
+        ${months}
+      </div>
+    `;
+  }
+
+  // =========================
+  // Kakao SDK
+  // =========================
+  $('loadSdk').addEventListener('click', function(){
+    const key = $('kakaoKey').value.trim();
+    if(!key){ alert('Enter Kakao JavaScript key.'); return; }
+    if(sdkReady){ alert('SDK already loaded.'); return; }
+
+    const s = document.createElement('script');
+    s.src = 'https://dapi.kakao.com/v2/maps/sdk.js?appkey=' + encodeURIComponent(key) + '&autoload=false';
+    s.onload = function(){
+      kakao.maps.load(function(){
+        initMap();
+        sdkReady = true;
+        $('status').textContent = 'SDK loaded. 엑셀 업로드 하세요.';
+        log('SDK loaded.');
+      });
+    };
+    s.onerror = function(){ alert('SDK load failed. Check key & domain.'); };
+    document.head.appendChild(s);
+  });
+
+  function initMap(){
+    const center = new kakao.maps.LatLng(37.5665, 126.9780);
+    map = new kakao.maps.Map($('map'), { center, level: 6 });
+    log('Map initialized.');
+  }
+
+  function clearMap(){
+    markers.forEach(m => m.setMap(null));
+    markers = [];
+  }
+
+  function makeDotMarker(lat, lng, colorHex, title){
+    const safe = (title||'').replace(/"/g,'&quot;');
+    const html =
+      '<div style="width:12px;height:12px;border-radius:999px;background:'+colorHex+
+      ';border:2px solid #00000033;box-shadow:0 1px 2px #00000022" title="'+safe+'"></div>';
+
+    const overlay = new kakao.maps.CustomOverlay({
+      position: new kakao.maps.LatLng(lat,lng),
+      content: html,
+      yAnchor: 0.5, xAnchor: 0.5
+    });
+    overlay.setMap(map);
+    return overlay;
+  }
+
+  function fitToMarkers(){
+    if(!markers.length) return;
+    const bounds = new kakao.maps.LatLngBounds();
+    for(const m of markers){
+      bounds.extend(m.getPosition());
+    }
+    map.setBounds(bounds, 24, 24, 24, 24);
+  }
+
+  function flyTo(lat, lng, level){
+    if(!map) return;
+    map.panTo(new kakao.maps.LatLng(lat, lng));
+    if(level != null) map.setLevel(level);
+  }
+
+  // =========================
+  // Excel parsing
+  // =========================
+  function readWorkbook(file){
+    return file.arrayBuffer().then(ab => XLSX.read(ab,{type:'array'}));
+  }
+  function sheetToRows(wb, name){
+    const ws = wb.Sheets[name];
+    return ws ? XLSX.utils.sheet_to_json(ws,{defval:''}) : null;
+  }
+  function validateHeaders(rows, need){
+    if(!rows || !rows.length) return false;
+    for(const k of need){ if(!(k in rows[0])) return false; }
+    return true;
+  }
+  function rowsToPoints(rows){
+    return rows.map(r => ({
+      name: String(r.Name || '').trim(),
+      address: String(r.Address || '').trim(),
+      lat: toNum(r.Latitude),
+      lng: toNum(r.Longitude)
+    })).filter(p => isFinite(p.lat) && isFinite(p.lng));
+  }
+
+  // PSR sheet columns:
+  // A: store name (same as shabu name)
+  // B: Category
+  // C: Size
+  // D: Rent
+  // E~O: 1월PSR~11월PSR (header names)
+  function parsePSRRows(rows){
+    // We don't strictly require Address/Lat/Lng here because coords come from Shabu sheet.
+    const need = ['Category','Size','Rent'];
+    if(!rows || !rows.length) return [];
+
+    // store name header could be "Name" or "Store" etc; user said A열 same as shabu name,
+    // most likely header is "Name". We'll support both:
+    const first = rows[0];
+    const nameKey =
+      ('Name' in first) ? 'Name' :
+      ('Store' in first) ? 'Store' :
+      ('매장명' in first) ? '매장명' :
+      Object.keys(first)[0]; // fallback: first column
+
+    return rows.map(r => {
+      const storeName = String(r[nameKey] || '').trim();
+      const category  = String(r.Category || r['Category'] || '').trim();
+      const size      = String(r.Size || '').trim();
+      const rent      = String(r.Rent || '').trim();
+
+      const months = {};
+      // Try both "1월PSR" style and English month keys if user renamed
+      for(const mk of MONTH_KEYS){
+        const v = r[mk.psr];
+        const n = toNum(v);
+        months[mk.key] = (isFinite(n) ? n : '');
+      }
+
+      return { storeName, category, size, rent, months };
+    });
+  }
+
+  function joinPSRWithCoords(psrRows, shabuPoints){
+    // build map from normalized name -> point (first match)
+    const mp = new Map();
+    for(const p of shabuPoints){
+      const k = normalizeName(p.name);
+      if(!mp.has(k)) mp.set(k, p);
+    }
+
+    return psrRows.map(r => {
+      const k = normalizeName(r.storeName);
+      const p = mp.get(k);
+      return {
+        ...r,
+        address: p ? p.address : '',
+        lat: p ? p.lat : null,
+        lng: p ? p.lng : null,
+        hasCoords: !!p
+      };
+    });
+  }
+
+  // =========================
+  // Month range + average
+  // =========================
+  function getRangeKeys(iStart, iEnd){
+    const out = [];
+    for(let i=iStart; i<=iEnd; i++){
+      out.push(MONTH_KEYS[i].key);
+    }
+    return out;
+  }
+
+  function computeAvgPSR(row, rangeKeys){
+    const vals = [];
+    for(const k of rangeKeys){
+      const v = row.months ? row.months[k] : '';
+      if(v === '' || v == null) continue;
+      const n = toNum(v);
+      if(isFinite(n)) vals.push(n);
+    }
+    if(!vals.length) return { avg: null, used: 0 };
+    const sum = vals.reduce((a,b)=>a+b,0);
+    return { avg: sum / vals.length, used: vals.length };
+  }
+
+  function bucketOf(avg, n1, n2){
+    if(avg == null) return 'No data';
+    if(avg < n1) return `PSR < ${n1}`;
+    if(avg < n2) return `${n1} ≤ PSR < ${n2}`;
+    return `PSR ≥ ${n2}`;
+  }
+
+  function bucketColor(bucket){
+    if(bucket === 'No data') return COLOR_GRAY;
+    if(bucket.startsWith('PSR <')) return COLOR_RED;
+    if(bucket.includes('≤ PSR <')) return COLOR_GREEN;
+    return COLOR_BLUE;
+  }
+
+  // =========================
+  // Rendering
+  // =========================
+  function renderBuckets(groups){
+    const setList = (id, arr, colorName) => {
+      const el = $(id);
+      if(!arr.length){
+        el.innerHTML = '<span class="muted">없음</span>';
+        return;
+      }
+      el.innerHTML = arr.map(r => {
+        const avg = (r.avgPSR == null) ? 'N/A' : r.avgPSR.toFixed(2);
+        const name = escapeHtml(r.storeName || '(무제)');
+        const cat = escapeHtml(r.category || '');
+        const addr = escapeHtml(r.address || '');
+        const has = r.hasCoords ? '' : ' <span class="badge">NO COORDS</span>';
+        const link = r.hasCoords
+          ? `<a href="#" class="store" data-fly="1" data-lat="${r.lat}" data-lng="${r.lng}">${name}</a>`
+          : `<span>${name}</span>`;
+        return `
+          <div class="bucketItem">
+            <div><strong>${link}</strong>${has} <span class="badge">${cat || '—'}</span></div>
+            <div class="muted tiny">${addr}</div>
+            <div class="tiny">Avg PSR: <strong>${avg}</strong> (n=${r.usedMonths})</div>
+          </div>
+        `;
+      }).join('');
+    };
+
+    setList('bucket1', groups.b1, 'red');
+    setList('bucket2', groups.b2, 'green');
+    setList('bucket3', groups.b3, 'blue');
+    setList('bucket4', groups.b4, 'gray');
+
+    $('b1Title').textContent = `Bucket 1 (PSR < N1) — ${groups.b1.length}`;
+    $('b2Title').textContent = `Bucket 2 (N1 ≤ PSR < N2) — ${groups.b2.length}`;
+    $('b3Title').textContent = `Bucket 3 (PSR ≥ N2) — ${groups.b3.length}`;
+    $('b4Title').textContent = `No data available — ${groups.b4.length}`;
+  }
+
+  function renderCategorySummary(rows){
+    const body = $('catBody');
+    const valid = rows.filter(r => r.avgPSR != null);
+
+    if(!valid.length){
+      body.innerHTML = '<tr><td colspan="3" class="muted">-</td></tr>';
+      return;
+    }
+
+    const mp = new Map(); // cat -> {n,sum}
+    for(const r of valid){
+      const cat = (r.category || '').trim() || '(Blank)';
+      if(!mp.has(cat)) mp.set(cat, { n:0, sum:0 });
+      const o = mp.get(cat);
+      o.n += 1;
+      o.sum += r.avgPSR;
+    }
+
+    const arr = Array.from(mp.entries()).map(([cat, o]) => ({
+      cat, n:o.n, avg:o.sum / o.n
+    })).sort((a,b) => b.n - a.n);
+
+    body.innerHTML = arr.map(x => `
+      <tr>
+        <td>${escapeHtml(x.cat)}</td>
+        <td>${x.n}</td>
+        <td>${x.avg.toFixed(2)}</td>
+      </tr>
+    `).join('');
+  }
+
+  function renderResultsTable(rows, rangeKeys){
+    // Build head: fixed columns + month columns + metadata
+    const head = $('resultsHead');
+    const monthCols = rangeKeys.map(k => `<th>${escapeHtml(k)}</th>`).join('');
+
+    head.innerHTML = `
+      <th>#</th>
+      <th>Bucket</th>
+      <th>Store</th>
+      <th>Category</th>
+      <th>AvgPSR</th>
+      <th>UsedMonths</th>
+      <th>Size</th>
+      <th>Rent</th>
+      <th>Address</th>
+      ${monthCols}
+    `;
+
+    const body = $('resultsBody');
+    $('statRows').textContent = `Rows: ${rows.length}`;
+
+    if(!rows.length){
+      body.innerHTML = `<tr><td colspan="${9 + rangeKeys.length}" class="muted">-</td></tr>`;
+      return;
+    }
+
+    body.innerHTML = rows.map((r, i) => {
+      const avg = (r.avgPSR == null) ? '' : r.avgPSR.toFixed(2);
+      const months = rangeKeys.map(k => {
+        const v = (r.months && (k in r.months)) ? r.months[k] : '';
+        return `<td>${v === '' || v == null ? '' : v}</td>`;
+      }).join('');
+
+      return `
+        <tr data-idx="${i}" data-hascoords="${r.hasCoords ? '1':'0'}">
+          <td>${i+1}</td>
+          <td>${escapeHtml(r.bucket)}</td>
+          <td>${escapeHtml(r.storeName || '')}</td>
+          <td>${escapeHtml(r.category || '')}</td>
+          <td>${avg}</td>
+          <td>${r.usedMonths}</td>
+          <td>${escapeHtml(r.size || '')}</td>
+          <td>${escapeHtml(r.rent || '')}</td>
+          <td>${escapeHtml(r.address || '')}</td>
+          ${months}
+        </tr>
+      `;
+    }).join('');
+  }
+
+  function drawMapDots(rows){
+    clearMap();
+    for(const r of rows){
+      if(!r.hasCoords) continue;
+      const c = bucketColor(r.bucket);
+      const title = `${r.storeName || ''} / ${r.category || '-'} / ${r.bucket} / avg=${r.avgPSR == null ? 'N/A' : r.avgPSR.toFixed(2)}`;
+      markers.push(makeDotMarker(r.lat, r.lng, c, title));
+    }
+    fitToMarkers();
+  }
+
+  // =========================
+  // CSV
+  // =========================
+  function toCSV(rows, rangeKeys){
+    const header = [
+      'Bucket','Store','Category','AvgPSR','UsedMonths','Size','Rent','Address','Latitude','Longitude'
+    ].concat(rangeKeys.map(k => 'PSR_' + k));
+
+    const esc = (v) => {
+      let s = String(v ?? '');
+      s = s.replace(/\r?\n/g,' ');
+      if(/[",\n]/.test(s)) return '"' + s.replace(/"/g,'""') + '"';
+      return s;
+    };
+
+    const lines = [];
+    lines.push(header.join(','));
+    for(const r of rows){
+      const base = [
+        r.bucket,
+        r.storeName,
+        r.category,
+        (r.avgPSR == null ? '' : r.avgPSR),
+        r.usedMonths,
+        r.size,
+        r.rent,
+        r.address,
+        (r.lat == null ? '' : r.lat),
+        (r.lng == null ? '' : r.lng)
+      ];
+      const months = rangeKeys.map(k => {
+        const v = r.months && (k in r.months) ? r.months[k] : '';
+        return (v == null ? '' : v);
+      });
+      lines.push(base.concat(months).map(esc).join(','));
+    }
+    return lines.join('\n');
+  }
+
+  function downloadText(filename, text){
+    const bom = '\uFEFF';
+    const normalized = String(text).replace(/\n/g, '\r\n');
+    const blob = new Blob([bom + normalized], {type:'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  // =========================
+  // Main analysis
+  // =========================
+  async function analyzePSR(){
+    if(!sdkReady){ alert('Load SDK first.'); return; }
+    if(!wbLoaded){ alert('Upload XLSX first.'); return; }
+
+    const n1 = clampInt($('n1').value, 0, 1000000);
+    const n2 = clampInt($('n2').value, 0, 1000000);
+    $('n1').value = n1;
+    $('n2').value = n2;
+
+    if(n2 <= n1){
+      alert('Start condition: Number2 must be greater than Number1 (N2 > N1).');
+      return;
+    }
+
+    const iStart = parseInt($('mStart').value, 10);
+    const iEnd   = parseInt($('mEnd').value, 10);
+    if(!(iStart < iEnd)){
+      alert('Start Month < End Month 여야 합니다.');
+      return;
+    }
+
+    const rangeKeys = getRangeKeys(iStart, iEnd);
+    currentRangeKeys = rangeKeys;
+
+    $('rangeInfo').textContent = `${MONTH_KEYS[iStart].label} ~ ${MONTH_KEYS[iEnd].label} (keys: ${rangeKeys.join(', ')})`;
+    $('status').textContent = 'Analyzing...';
+    log(`[Analyze] N1=${n1}, N2=${n2}, range=${rangeKeys.join(',')}`);
+
+    // compute avg + bucket
+    const out = joinedRows.map(r => {
+      const { avg, used } = computeAvgPSR(r, rangeKeys);
+      const bucket = bucketOf(avg, n1, n2);
+      return {
+        ...r,
+        avgPSR: avg,
+        usedMonths: used,
+        bucket
+      };
+    });
+
+    // groups
+    const b1 = out.filter(r => r.avgPSR != null && r.avgPSR < n1);
+    const b2 = out.filter(r => r.avgPSR != null && r.avgPSR >= n1 && r.avgPSR < n2);
+    const b3 = out.filter(r => r.avgPSR != null && r.avgPSR >= n2);
+    const b4 = out.filter(r => r.avgPSR == null);
+
+    $('bucketInfo').textContent = `b1=${b1.length}, b2=${b2.length}, b3=${b3.length}, nodata=${b4.length}`;
+
+    // store table rows (all rows)
+    tableRows = out.slice();
+
+    // render everything
+    renderBuckets({ b1, b2, b3, b4 });
+    renderCategorySummary(out);
+    renderResultsTable(tableRows, rangeKeys);
+    drawMapDots(tableRows);
+
+    $('csvTable').disabled = (tableRows.length === 0);
+    $('status').textContent = 'Done.';
+    log(`[Analyze] done. rows=${tableRows.length}`);
+  }
+
+  // =========================
+  // Event bindings
+  // =========================
+  function initMonthSelectors(){
+    const s = $('mStart');
+    const e = $('mEnd');
+    s.innerHTML = '';
+    e.innerHTML = '';
+    MONTH_KEYS.forEach((m, idx) => {
+      const o1 = document.createElement('option');
+      o1.value = String(idx);
+      o1.textContent = m.key;
+      s.appendChild(o1);
+
+      const o2 = document.createElement('option');
+      o2.value = String(idx);
+      o2.textContent = m.key;
+      e.appendChild(o2);
+    });
+    s.value = '0'; // Jan
+    e.value = String(MONTH_KEYS.length - 1); // Nov
+  }
+  initMonthSelectors();
+
+  // bucket list click -> fly
+  document.addEventListener('click', function(ev){
+    const a = ev.target.closest('a[data-fly="1"]');
+    if(!a) return;
+    ev.preventDefault();
+    const lat = parseFloat(a.getAttribute('data-lat'));
+    const lng = parseFloat(a.getAttribute('data-lng'));
+    if(isFinite(lat) && isFinite(lng)) flyTo(lat, lng, 4);
+  });
+
+  // table hover & click (event delegation)
+  (function bindTableInteractions(){
+    const body = $('resultsBody');
+    body.addEventListener('mousemove', function(e){
+      const tr = e.target.closest('tr[data-idx]');
+      if(!tr){ hideTooltip(); return; }
+      const idx = parseInt(tr.dataset.idx, 10);
+      const r = tableRows[idx];
+      if(!r){ hideTooltip(); return; }
+      showTooltip(buildTooltipHTML(r, currentRangeKeys), e.clientX, e.clientY);
+      moveTooltip(e.clientX, e.clientY);
+    });
+    body.addEventListener('mouseleave', hideTooltip);
+
+    body.addEventListener('click', function(e){
+      const tr = e.target.closest('tr[data-idx]');
+      if(!tr) return;
+      const idx = parseInt(tr.dataset.idx, 10);
+      const r = tableRows[idx];
+      if(r && r.hasCoords){
+        flyTo(r.lat, r.lng, 4);
+      }
+    });
+  })();
+
+  $('analyze').addEventListener('click', analyzePSR);
+  $('csvTable').addEventListener('click', function(){
+    if(!tableRows.length){ alert('No table rows.'); return; }
+    const csv = toCSV(tableRows, currentRangeKeys);
+    downloadText(`shabu_psr_table_${currentRangeKeys[0]}_${currentRangeKeys[currentRangeKeys.length-1]}.csv`, csv);
+    log(`[CSV] downloaded. rows=${tableRows.length}`);
+  });
+
+  // auto analyze on input changes (only if data loaded)
+  const autoAnalyze = debounce(() => {
+    if(wbLoaded) analyzePSR();
+  }, 250);
+  $('n1').addEventListener('input', autoAnalyze);
+  $('n2').addEventListener('input', autoAnalyze);
+  $('mStart').addEventListener('change', autoAnalyze);
+  $('mEnd').addEventListener('change', autoAnalyze);
+
+  // =========================
+  // Excel upload
+  // =========================
+  $('xlsx').addEventListener('change', async function(){
+    const file = $('xlsx').files && $('xlsx').files[0];
+    if(!file) return;
+    if(!sdkReady){
+      alert('먼저 Kakao SDK를 로드하세요.');
+      $('xlsx').value = '';
+      return;
+    }
+
+    try{
+      const wb = await readWorkbook(file);
+      const sheetNames = wb.SheetNames || [];
+
+      // sheet1 = shabu coords
+      if(sheetNames.length < 2){
+        alert('시트가 최소 2개 필요합니다. (1: 샤브올데이 좌표, + 샤브올데이PSR)');
+        return;
+      }
+      const s1 = sheetNames[0];
+      const r1 = sheetToRows(wb, s1);
+      if(!validateHeaders(r1, ['Name','Address','Latitude','Longitude'])){
+        alert('Sheet1(샤브올데이 좌표)에는 필수 컬럼이 있어야 합니다: Name, Address, Latitude, Longitude');
+        return;
+      }
+      shabuPoints = rowsToPoints(r1);
+
+      // find PSR sheet by name
+      const psrName = sheetNames.find(n => String(n).trim() === '샤브올데이PSR');
+      if(!psrName){
+        alert('추가 시트 "샤브올데이PSR" 를 찾을 수 없습니다. 시트명을 정확히 확인하세요.');
+        return;
+      }
+      const rPsr = sheetToRows(wb, psrName);
+      // We won't strictly validate month headers because user can have blanks, but months expected exist.
+      psrRows = parsePSRRows(rPsr);
+
+      // join
+      joinedRows = joinPSRWithCoords(psrRows, shabuPoints);
+
+      wbLoaded = true;
+      $('analyze').disabled = false;
+      $('csvTable').disabled = true;
+
+      $('statSheets').textContent = `Sheets: 1:${s1} / PSR:${psrName}`;
+      $('status').textContent = `Loaded. Shabu coords=${shabuPoints.length}, PSR rows=${psrRows.length}`;
+      log(`[XLSX] loaded. sheet1=${s1} coords=${shabuPoints.length}, psr=${psrName} rows=${psrRows.length}`);
+
+      // initial analyze
+      analyzePSR();
+
+    }catch(e){
+      console.error(e);
+      alert('Read error: ' + (e && e.message ? e.message : e));
+      log('[ERR] ' + (e && e.message ? e.message : e));
+    }
+  });
+
+  </script>
+</body>
+</html>
