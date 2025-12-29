@@ -233,6 +233,10 @@
   const COLOR_BLUE  = '#3B82F6';
   const COLOR_GRAY  = '#9CA3AF';
 
+  // nearby config (거리 계산)
+  const NEAR_MAX_KM = 5;
+  const NEAR_LIMIT_PER_ROW = 30; // 너무 길어지는 것 방지 (원하면 변경)
+
   // =========================
   // STATE
   // =========================
@@ -293,6 +297,39 @@
       .trim();
   }
 
+  // ---------- Number formatting: 0dp + thousand separators ----------
+  const NF0 = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 0 });
+
+  function fmtInt(n){
+    if(n == null || n === '' || !isFinite(n)) return '';
+    return NF0.format(Math.round(Number(n)));
+  }
+
+  function fmtMaybeNumber(v){
+    const n = toNum(v);
+    if(isFinite(n)) return fmtInt(n);
+    return String(v ?? '');
+  }
+
+  // ---------- Distance (Haversine) in KM ----------
+  function haversineKm(lat1, lng1, lat2, lng2){
+    const R = 6371; // km
+    const toRad = (d) => d * Math.PI / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLng = toRad(lng2 - lng1);
+    const a =
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+      Math.sin(dLng/2) * Math.sin(dLng/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+  }
+
+  function formatNearList(list){
+    if(!list || !list.length) return '';
+    return list.map(x => `${x.storeName} (${x.distKm.toFixed(1)}km)`).join(', ');
+  }
+
   // =========================
   // Tooltip
   // =========================
@@ -321,19 +358,34 @@
   function buildTooltipHTML(r, rangeKeys){
     const months = rangeKeys.map(k => {
       const v = r.months && (k in r.months) ? r.months[k] : '';
-      const vv = (v == null || v === '') ? '-' : v;
+      const vv = (v == null || v === '') ? '-' : fmtInt(v);
       return `<div class="kv"><div class="k">${escapeHtml(k)}</div><div>${escapeHtml(vv)}</div></div>`;
     }).join('');
 
+    const rentFmt = fmtMaybeNumber(r.rent);
+    const avgFmt = (r.avgPSR == null ? 'N/A' : fmtInt(r.avgPSR));
+
+    const near1 = r.hasCoords ? formatNearList(r.near1) : '';
+    const near3 = r.hasCoords ? formatNearList(r.near3) : '';
+    const near5 = r.hasCoords ? formatNearList(r.near5) : '';
+
     return `
       <div class="t">${escapeHtml(r.storeName || '(무제)')}</div>
-      <div><code>${escapeHtml(r.bucket)}</code> / Avg PSR: <strong>${r.avgPSR == null ? 'N/A' : r.avgPSR.toFixed(2)}</strong> (n=${r.usedMonths})</div>
+      <div><code>${escapeHtml(r.bucket)}</code> / Avg PSR: <strong>${avgFmt}</strong> (n=${r.usedMonths})</div>
       <div class="kv" style="margin-top:8px">
         <div class="k">Category</div><div>${escapeHtml(r.category || '')}</div>
         <div class="k">Size</div><div>${escapeHtml(r.size || '')}</div>
-        <div class="k">Rent</div><div>${escapeHtml(r.rent || '')}</div>
+        <div class="k">Rent</div><div>${escapeHtml(rentFmt || '')}</div>
         <div class="k">Address</div><div>${escapeHtml(r.address || '')}</div>
       </div>
+
+      <div class="months">
+        <div style="font-weight:700;margin-bottom:6px">Nearby stores (straight-line)</div>
+        <div class="kv"><div class="k">≤ 1km</div><div>${escapeHtml(near1 || '-')}</div></div>
+        <div class="kv"><div class="k">≤ 3km</div><div>${escapeHtml(near3 || '-')}</div></div>
+        <div class="kv"><div class="k">≤ 5km</div><div>${escapeHtml(near5 || '-')}</div></div>
+      </div>
+
       <div class="months">
         <div style="font-weight:700;margin-bottom:6px">Monthly PSR</div>
         ${months}
@@ -435,18 +487,14 @@
   // D: Rent
   // E~O: 1월PSR~11월PSR (header names)
   function parsePSRRows(rows){
-    // We don't strictly require Address/Lat/Lng here because coords come from Shabu sheet.
-    const need = ['Category','Size','Rent'];
     if(!rows || !rows.length) return [];
 
-    // store name header could be "Name" or "Store" etc; user said A열 same as shabu name,
-    // most likely header is "Name". We'll support both:
     const first = rows[0];
     const nameKey =
       ('Name' in first) ? 'Name' :
       ('Store' in first) ? 'Store' :
       ('매장명' in first) ? '매장명' :
-      Object.keys(first)[0]; // fallback: first column
+      Object.keys(first)[0];
 
     return rows.map(r => {
       const storeName = String(r[nameKey] || '').trim();
@@ -455,7 +503,6 @@
       const rent      = String(r.Rent || '').trim();
 
       const months = {};
-      // Try both "1월PSR" style and English month keys if user renamed
       for(const mk of MONTH_KEYS){
         const v = r[mk.psr];
         const n = toNum(v);
@@ -467,7 +514,6 @@
   }
 
   function joinPSRWithCoords(psrRows, shabuPoints){
-    // build map from normalized name -> point (first match)
     const mp = new Map();
     for(const p of shabuPoints){
       const k = normalizeName(p.name);
@@ -529,14 +575,14 @@
   // Rendering
   // =========================
   function renderBuckets(groups){
-    const setList = (id, arr, colorName) => {
+    const setList = (id, arr) => {
       const el = $(id);
       if(!arr.length){
         el.innerHTML = '<span class="muted">없음</span>';
         return;
       }
       el.innerHTML = arr.map(r => {
-        const avg = (r.avgPSR == null) ? 'N/A' : r.avgPSR.toFixed(2);
+        const avg = (r.avgPSR == null) ? 'N/A' : fmtInt(r.avgPSR);
         const name = escapeHtml(r.storeName || '(무제)');
         const cat = escapeHtml(r.category || '');
         const addr = escapeHtml(r.address || '');
@@ -554,10 +600,10 @@
       }).join('');
     };
 
-    setList('bucket1', groups.b1, 'red');
-    setList('bucket2', groups.b2, 'green');
-    setList('bucket3', groups.b3, 'blue');
-    setList('bucket4', groups.b4, 'gray');
+    setList('bucket1', groups.b1);
+    setList('bucket2', groups.b2);
+    setList('bucket3', groups.b3);
+    setList('bucket4', groups.b4);
 
     $('b1Title').textContent = `Bucket 1 (PSR < N1) — ${groups.b1.length}`;
     $('b2Title').textContent = `Bucket 2 (N1 ≤ PSR < N2) — ${groups.b2.length}`;
@@ -591,13 +637,12 @@
       <tr>
         <td>${escapeHtml(x.cat)}</td>
         <td>${x.n}</td>
-        <td>${x.avg.toFixed(2)}</td>
+        <td>${fmtInt(x.avg)}</td>
       </tr>
     `).join('');
   }
 
   function renderResultsTable(rows, rangeKeys){
-    // Build head: fixed columns + month columns + metadata
     const head = $('resultsHead');
     const monthCols = rangeKeys.map(k => `<th>${escapeHtml(k)}</th>`).join('');
 
@@ -611,6 +656,9 @@
       <th>Size</th>
       <th>Rent</th>
       <th>Address</th>
+      <th>Near(≤1km)</th>
+      <th>Near(≤3km)</th>
+      <th>Near(≤5km)</th>
       ${monthCols}
     `;
 
@@ -618,15 +666,21 @@
     $('statRows').textContent = `Rows: ${rows.length}`;
 
     if(!rows.length){
-      body.innerHTML = `<tr><td colspan="${9 + rangeKeys.length}" class="muted">-</td></tr>`;
+      body.innerHTML = `<tr><td colspan="${12 + rangeKeys.length}" class="muted">-</td></tr>`;
       return;
     }
 
     body.innerHTML = rows.map((r, i) => {
-      const avg = (r.avgPSR == null) ? '' : r.avgPSR.toFixed(2);
+      const avg = (r.avgPSR == null) ? '' : fmtInt(r.avgPSR);
+      const rentFmt = fmtMaybeNumber(r.rent);
+
+      const near1 = r.hasCoords ? formatNearList(r.near1) : '';
+      const near3 = r.hasCoords ? formatNearList(r.near3) : '';
+      const near5 = r.hasCoords ? formatNearList(r.near5) : '';
+
       const months = rangeKeys.map(k => {
         const v = (r.months && (k in r.months)) ? r.months[k] : '';
-        return `<td>${v === '' || v == null ? '' : v}</td>`;
+        return `<td>${v === '' || v == null ? '' : fmtInt(v)}</td>`;
       }).join('');
 
       return `
@@ -638,8 +692,11 @@
           <td>${avg}</td>
           <td>${r.usedMonths}</td>
           <td>${escapeHtml(r.size || '')}</td>
-          <td>${escapeHtml(r.rent || '')}</td>
+          <td>${escapeHtml(rentFmt)}</td>
           <td>${escapeHtml(r.address || '')}</td>
+          <td>${escapeHtml(near1)}</td>
+          <td>${escapeHtml(near3)}</td>
+          <td>${escapeHtml(near5)}</td>
           ${months}
         </tr>
       `;
@@ -651,7 +708,7 @@
     for(const r of rows){
       if(!r.hasCoords) continue;
       const c = bucketColor(r.bucket);
-      const title = `${r.storeName || ''} / ${r.category || '-'} / ${r.bucket} / avg=${r.avgPSR == null ? 'N/A' : r.avgPSR.toFixed(2)}`;
+      const title = `${r.storeName || ''} / ${r.category || '-'} / ${r.bucket} / avg=${r.avgPSR == null ? 'N/A' : fmtInt(r.avgPSR)}`;
       markers.push(makeDotMarker(r.lat, r.lng, c, title));
     }
     fitToMarkers();
@@ -662,7 +719,8 @@
   // =========================
   function toCSV(rows, rangeKeys){
     const header = [
-      'Bucket','Store','Category','AvgPSR','UsedMonths','Size','Rent','Address','Latitude','Longitude'
+      'Bucket','Store','Category','AvgPSR','UsedMonths','Size','Rent','Address','Latitude','Longitude',
+      'Near_1km','Near_3km','Near_5km'
     ].concat(rangeKeys.map(k => 'PSR_' + k));
 
     const esc = (v) => {
@@ -679,13 +737,16 @@
         r.bucket,
         r.storeName,
         r.category,
-        (r.avgPSR == null ? '' : r.avgPSR),
+        (r.avgPSR == null ? '' : Math.round(r.avgPSR)),
         r.usedMonths,
         r.size,
-        r.rent,
+        (isFinite(toNum(r.rent)) ? Math.round(toNum(r.rent)) : r.rent),
         r.address,
         (r.lat == null ? '' : r.lat),
-        (r.lng == null ? '' : r.lng)
+        (r.lng == null ? '' : r.lng),
+        (r.hasCoords ? formatNearList(r.near1) : ''),
+        (r.hasCoords ? formatNearList(r.near3) : ''),
+        (r.hasCoords ? formatNearList(r.near5) : '')
       ];
       const months = rangeKeys.map(k => {
         const v = r.months && (k in r.months) ? r.months[k] : '';
@@ -749,9 +810,40 @@
         ...r,
         avgPSR: avg,
         usedMonths: used,
-        bucket
+        bucket,
+        near1: [],
+        near3: [],
+        near5: []
       };
     });
+
+    // ---- compute nearby stores within 1/3/5km (straight-line) ----
+    const coordRows = out.map((r, idx) => ({ r, idx })).filter(x => x.r.hasCoords);
+
+    for(let a=0; a<coordRows.length; a++){
+      const { r: ra, idx: ia } = coordRows[a];
+
+      for(let b=0; b<coordRows.length; b++){
+        if(a === b) continue;
+        const { r: rb } = coordRows[b];
+
+        const d = haversineKm(ra.lat, ra.lng, rb.lat, rb.lng);
+        if(d > NEAR_MAX_KM) continue;
+
+        const item = { storeName: rb.storeName || '(무제)', distKm: d };
+        if(d <= 1) out[ia].near1.push(item);
+        if(d <= 3) out[ia].near3.push(item);
+        out[ia].near5.push(item);
+      }
+
+      out[ia].near1.sort((x,y)=>x.distKm-y.distKm);
+      out[ia].near3.sort((x,y)=>x.distKm-y.distKm);
+      out[ia].near5.sort((x,y)=>x.distKm-y.distKm);
+
+      out[ia].near1 = out[ia].near1.slice(0, NEAR_LIMIT_PER_ROW);
+      out[ia].near3 = out[ia].near3.slice(0, NEAR_LIMIT_PER_ROW);
+      out[ia].near5 = out[ia].near5.slice(0, NEAR_LIMIT_PER_ROW);
+    }
 
     // groups
     const b1 = out.filter(r => r.avgPSR != null && r.avgPSR < n1);
@@ -867,7 +959,6 @@
       const wb = await readWorkbook(file);
       const sheetNames = wb.SheetNames || [];
 
-      // sheet1 = shabu coords
       if(sheetNames.length < 2){
         alert('시트가 최소 2개 필요합니다. (1: 샤브올데이 좌표, + 샤브올데이PSR)');
         return;
@@ -880,17 +971,14 @@
       }
       shabuPoints = rowsToPoints(r1);
 
-      // find PSR sheet by name
       const psrName = sheetNames.find(n => String(n).trim() === '샤브올데이PSR');
       if(!psrName){
         alert('추가 시트 "샤브올데이PSR" 를 찾을 수 없습니다. 시트명을 정확히 확인하세요.');
         return;
       }
       const rPsr = sheetToRows(wb, psrName);
-      // We won't strictly validate month headers because user can have blanks, but months expected exist.
       psrRows = parsePSRRows(rPsr);
 
-      // join
       joinedRows = joinPSRWithCoords(psrRows, shabuPoints);
 
       wbLoaded = true;
@@ -901,7 +989,6 @@
       $('status').textContent = `Loaded. Shabu coords=${shabuPoints.length}, PSR rows=${psrRows.length}`;
       log(`[XLSX] loaded. sheet1=${s1} coords=${shabuPoints.length}, psr=${psrName} rows=${psrRows.length}`);
 
-      // initial analyze
       analyzePSR();
 
     }catch(e){
